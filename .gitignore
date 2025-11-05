@@ -2,3 +2,6 @@
 zig-out/
 *.o
 build/
+*.bin
+*.elf
+Zigumi.img
