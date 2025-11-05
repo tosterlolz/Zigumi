@@ -106,6 +106,8 @@ pub const Writer = struct {
                 }
             },
         }
+        // Mirror output to serial (COM1) so messages are visible on -serial stdio
+        serial_write_char(char);
     }
 
     pub fn write(self: *Writer, text: []const u8) void {
@@ -119,3 +121,13 @@ pub const Writer = struct {
         self.bg = bg;
     }
 };
+
+fn serial_write_char(c: u8) void {
+    // Write a single byte to COM1 (0x3F8). Use the same inline asm style as ATA driver.
+    const port: u16 = 0x03F8;
+    asm volatile ("outb %[val], %[port]"
+        :
+        : [val] "{al}" (c),
+          [port] "{dx}" (port),
+    );
+}

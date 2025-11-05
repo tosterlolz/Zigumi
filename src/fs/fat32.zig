@@ -123,6 +123,9 @@ pub const FAT32FS = struct {
     root_cluster: u32,
     data_offset: u32,
     boot_buffer: [512]u8,
+    // Persistent buffers to avoid returning slices to stack memory
+    dir_entries: [256]DirectoryEntry,
+    read_buffer: [8192]u8,
 
     pub fn init(letter: u8) FAT32FS {
         return FAT32FS{
@@ -139,6 +142,8 @@ pub const FAT32FS = struct {
             .root_cluster = 2,
             .data_offset = 0,
             .boot_buffer = [_]u8{0} ** 512,
+            .dir_entries = undefined,
+            .read_buffer = [_]u8{0} ** 8192,
         };
     }
 
@@ -202,39 +207,40 @@ pub const FAT32FS = struct {
         var cluster_buffer: [8192]u8 = undefined;
         try self.readCluster(self.root_cluster, &cluster_buffer);
 
-        var entries: [256]DirectoryEntry = undefined;
         var entry_count: usize = 0;
-
         var i: usize = 0;
         while (i < cluster_buffer.len and entry_count < 256) : (i += 32) {
-            const entry = @as(*const DirectoryEntry, @ptrCast(@alignCast(&cluster_buffer[i])));
+            const entry_ptr = @as(*const DirectoryEntry, @ptrCast(@alignCast(&cluster_buffer[i])));
+            const entry = entry_ptr.*;
             if (entry.name[0] == 0) break;
             if (entry.name[0] == 0xE5) continue;
 
-            entries[entry_count] = entry.*;
+            self.dir_entries[entry_count] = entry;
             entry_count += 1;
         }
 
-        return entries[0..entry_count];
+        return self.dir_entries[0..entry_count];
     }
 
     pub fn readFileData(self: *FAT32FS, cluster: u32, size: u32) ![]u8 {
         if (!self.mounted) return FAT32Error.NotMounted;
 
-        var buffer: [8192]u8 = undefined;
-        var bytes_read: u32 = 0;
+        var bytes_read: usize = 0;
+        const size_usize: usize = @as(usize, size);
         var current_cluster = cluster;
 
-        while (bytes_read < size and current_cluster < 0x0FFFFFF8) {
-            const to_read = @min(self.sectors_per_cluster * self.bytes_per_sector, size - bytes_read);
+        while (bytes_read < size_usize and current_cluster < 0x0FFFFFF8) {
+            const to_read_u32 = @min(self.sectors_per_cluster * self.bytes_per_sector, @as(u32, size_usize - bytes_read));
+            const to_read: usize = @as(usize, to_read_u32);
 
-            try self.readCluster(current_cluster, @as([*]u8, @ptrCast(&buffer)) + bytes_read);
+            const dest_ptr = @as([*]u8, @ptrCast(@alignCast(&self.read_buffer[bytes_read])));
+            try self.readCluster(current_cluster, dest_ptr);
             bytes_read += to_read;
 
             current_cluster = try self.getNextCluster(current_cluster);
         }
 
-        return buffer[0..bytes_read];
+        return self.read_buffer[0..bytes_read];
     }
 };
 

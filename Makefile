@@ -29,7 +29,7 @@ $(IMG): $(BOOT_BIN) $(KERNEL_BIN)
 	@echo "Created $(IMG)"
 
 run: $(IMG)
-	qemu-system-x86_64 -drive format=raw,file=$(IMG)
+	qemu-system-x86_64 -no-reboot -drive format=raw,file=$(IMG) 
 
 clean:
 	rm -r bin/ 

@@ -120,6 +120,8 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
+; (In-boot IDT/ISR stub removed — IDT will be set up by the kernel)
+
 ; ============================================================================
 ; Data section
 ; ============================================================================

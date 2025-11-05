@@ -5,7 +5,6 @@ const scheduler = @import("kernel/scheduler.zig");
 const tty = @import("term/tty.zig");
 const diskman = @import("drivers/diskman.zig");
 const fat32 = @import("fs/fat32.zig");
-const ext2 = @import("fs/ext2.zig");
 const panic_handler = @import("panic.zig");
 
 pub export fn _start() noreturn {
@@ -16,6 +15,11 @@ pub export fn _start() noreturn {
     syscalls.init(&writer, &kbd);
     scheduler.init();
     tty.init();
+    // Initialize physical and virtual memory managers
+    const pmm = @import("kernel/pmm.zig");
+    const vmm = @import("kernel/vmm.zig");
+    pmm.init();
+    vmm.init();
     diskman.init(); // Initialize disk manager
     // Defer FAT32 probing to on-demand changeDrive to avoid early I/O
     fat32.init(); // Initialize FAT32 (no auto-mount)
@@ -45,7 +49,9 @@ pub export fn _start() noreturn {
     writer.write("\n");
 
     // Setup interrupt for syscalls (int 0x80)
-    setupSyscallInterrupt();
+    // Initialize IDT and default interrupt handlers so exceptions don't triple-fault
+    const interrupts = @import("kernel/interrupts.zig");
+    interrupts.init();
 
     writer.setColor(.Cyan, .Black);
     writer.write("Starting userland shell...\n\n");
@@ -54,9 +60,7 @@ pub export fn _start() noreturn {
     jumpToUserland();
 
     // Should never reach here
-    while (true) {
-        asm volatile ("hlt");
-    }
+    panic_handler.panic("Kernel: Reached unreachable code after jumpToUserland", null, null);
 }
 
 fn setupSyscallInterrupt() void {

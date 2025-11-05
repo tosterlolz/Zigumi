@@ -8,6 +8,10 @@ pub const Syscall = enum(u32) {
     Close = 4,
     GetPid = 5,
     Sleep = 6,
+    PmmAlloc = 7,
+    PmmFree = 8,
+    VmmMap = 9,
+    VmmUnmap = 10,
 };
 
 pub const SyscallError = error{
@@ -19,6 +23,8 @@ pub const SyscallError = error{
 
 const vga = @import("../term/vga.zig");
 const keyboard = @import("../drivers/keyboard.zig");
+const pmm = @import("pmm.zig");
+const vmm = @import("vmm.zig");
 
 var writer: *vga.Writer = undefined;
 var kbd: *keyboard.Keyboard = undefined;
@@ -89,6 +95,24 @@ pub fn sys_exit(code: u32) noreturn {
 
 pub fn sys_getpid() u32 {
     return 1; // Always return PID 1 for now
+}
+
+pub fn sys_pmm_alloc() u32 {
+    // return physical address or 0 on failure
+    return pmm.alloc() orelse 0;
+}
+
+pub fn sys_pmm_free(phys: u32) u32 {
+    return @as(u32, pmm.free(phys));
+}
+
+pub fn sys_vmm_map(virt: u32, phys: u32, flags: u32) u32 {
+    _ = flags;
+    return @as(u32, vmm.map(virt, phys));
+}
+
+pub fn sys_vmm_unmap(virt: u32) u32 {
+    return @as(u32, vmm.unmap(virt));
 }
 
 pub fn sys_write(fd: u32, buffer_ptr: [*]const u8, length: u32) u32 {
