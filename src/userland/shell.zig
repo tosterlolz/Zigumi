@@ -1,6 +1,22 @@
 // Bash-like shell for Zigumi OS
 
 const libc = @import("libc.zig");
+const fat32 = @import("../fs/fat32.zig");
+
+var current_drive: u8 = 'A';
+var current_path: [256]u8 = undefined;
+var path_len: usize = 0;
+
+fn setPath(path: []const u8) void {
+    path_len = if (path.len > current_path.len) current_path.len else path.len;
+    for (path[0..path_len], 0..) |char, i| {
+        current_path[i] = char;
+    }
+}
+
+fn getFullPath() []const u8 {
+    return current_path[0..path_len];
+}
 
 pub fn start() noreturn {
     main();
@@ -8,6 +24,9 @@ pub fn start() noreturn {
 }
 
 fn main() void {
+    // Initialize path to root of current drive
+    setPath("/");
+
     // Print banner
     libc.println("=========================================");
     libc.println("             Zigumi Shell ");
@@ -20,7 +39,12 @@ fn main() void {
     var buffer: [256]u8 = undefined;
 
     while (true) {
-        libc.print("zigumi@kernel:~$ ");
+        // Print prompt with drive letter and current path
+        libc.print("zigumi@");
+        libc.putchar(current_drive);
+        libc.print(":");
+        libc.print(getFullPath());
+        libc.print("$ ");
 
         const line = libc.readLine(&buffer);
 
@@ -40,9 +64,14 @@ fn main() void {
         } else if (startsWith(cmd, "clear") or startsWith(cmd, "cls")) {
             clearScreen();
         } else if (startsWith(cmd, "ls")) {
-            listFiles();
+            listFiles(getFullPath());
         } else if (startsWith(cmd, "pwd")) {
-            libc.println("/home/root");
+            // Print drive letter and current path
+            libc.putchar(current_drive);
+            libc.print(":");
+            libc.println(getFullPath());
+        } else if (startsWith(cmd, "cd")) {
+            cdCommand(cmd);
         } else if (startsWith(cmd, "whoami")) {
             libc.println("root");
         } else if (startsWith(cmd, "uname")) {
@@ -75,8 +104,21 @@ fn main() void {
             libc.println("touch: filesystem is read-only");
         } else if (startsWith(cmd, "rm")) {
             libc.println("rm: filesystem is read-only");
-        } else if (startsWith(cmd, "cd")) {
-            libc.println("cd: not yet implemented");
+        } else if (startsWith(cmd, "cd ")) {
+            cdCommand(cmd[3..]);
+        } else if (cmd.len == 2 and cmd[1] == ':') {
+            // Handle drive letter change (e.g., "A:" or "B:")
+            const drive = cmd[0];
+            if (drive >= 'A' and drive <= 'Z') {
+                if (fat32.changeDrive(drive)) {
+                    current_drive = drive;
+                    setPath("/");
+                } else {
+                    libc.println("Invalid drive");
+                }
+            } else {
+                libc.println("Invalid drive letter");
+            }
         } else if (startsWith(cmd, "df")) {
             printDiskUsage();
         } else if (startsWith(cmd, "kill")) {
@@ -186,14 +228,211 @@ fn printHelp() void {
     libc.println("");
 }
 
-fn listFiles() void {
-    libc.println("total 24");
-    libc.println("drwxr-xr-x  2 root root  4096 Nov  5 12:00 .");
-    libc.println("drwxr-xr-x  3 root root  4096 Nov  5 12:00 ..");
-    libc.println("-rw-r--r--  1 root root  1024 Nov  5 11:30 README.TXT");
-    libc.println("-rwxr-xr-x  1 root root  8192 Nov  5 11:45 KERNEL.BIN");
-    libc.println("-rwxr-xr-x  1 root root   512 Nov  5 11:20 BOOT.BIN");
-    libc.println("-rw-r--r--  1 root root  2048 Nov  5 11:35 CONFIG.SYS");
+fn listFiles(path: []const u8) void {
+    const entries = fat32.listDir(path) catch {
+        libc.println("Error: Could not read directory");
+        return;
+    };
+
+    // Print directory listing
+    libc.println("Directory of ");
+    libc.putchar(current_drive);
+    libc.print(":");
+    libc.println(path);
+    libc.println("");
+
+    var total_files: usize = 0;
+    var total_dirs: usize = 0;
+    var total_size: u32 = 0;
+
+    for (entries) |entry| {
+        // Print attributes
+        if ((entry.attributes & 0x10) != 0) {
+            libc.print("<DIR>     ");
+            total_dirs += 1;
+        } else {
+            var size_buf: [10]u8 = undefined;
+            printSizeAligned(entry.file_size, &size_buf);
+            total_size += entry.file_size;
+            total_files += 1;
+        }
+
+        // Print filename (strip trailing spaces)
+        var name_end: usize = 11;
+        while (name_end > 0 and entry.name[name_end - 1] == ' ') {
+            name_end -= 1;
+        }
+
+        for (entry.name[0..name_end]) |char| {
+            libc.putchar(char);
+        }
+        libc.println("");
+    }
+
+    // Print summary
+    libc.println("");
+    libc.print("    ");
+    printNumber(total_files);
+    libc.print(" File(s)    ");
+    printNumber(total_size);
+    libc.println(" bytes");
+
+    libc.print("    ");
+    printNumber(total_dirs);
+    libc.println(" Dir(s)");
+}
+
+fn printNumber(num: u32) void {
+    var buf: [20]u8 = undefined;
+    var len: usize = 0;
+    var n = num;
+
+    if (n == 0) {
+        libc.putchar('0');
+        return;
+    }
+
+    while (n > 0) {
+        buf[len] = @as(u8, @intCast((n % 10) + '0'));
+        n /= 10;
+        len += 1;
+    }
+
+    while (len > 0) {
+        len -= 1;
+        libc.putchar(buf[len]);
+    }
+}
+
+fn printSizeAligned(size: u32, buf: []u8) void {
+    var pos: usize = 0;
+    var n = size;
+
+    // Convert to string, right to left
+    while (n > 0) {
+        buf[pos] = @as(u8, @intCast((n % 10) + '0'));
+        n /= 10;
+        pos += 1;
+    }
+
+    // Handle zero size
+    if (pos == 0) {
+        buf[pos] = '0';
+        pos += 1;
+    }
+
+    // Pad with spaces
+    while (pos < 9) {
+        libc.putchar(' ');
+        pos += 1;
+    }
+
+    // Print in correct order
+    var i: usize = pos;
+    while (i > 0) {
+        i -= 1;
+        libc.putchar(buf[i]);
+    }
+}
+
+fn cdCommand(path: []const u8) void {
+    // Check for empty path
+    if (path.len == 0) {
+        // Empty cd command - go to root
+        setPath("/");
+        return;
+    }
+
+    // Handle drive letter change if path starts with drive letter
+    if (path.len >= 2 and path[1] == ':') {
+        const drive = path[0];
+        if (drive >= 'A' and drive <= 'Z') {
+            if (!fat32.changeDrive(drive)) {
+                libc.println("Invalid drive");
+                return;
+            }
+            current_drive = drive;
+            // If only drive letter specified, go to root
+            if (path.len == 2) {
+                setPath("/");
+                return;
+            }
+            // Continue with the rest of the path
+            cdCommand(path[2..]);
+            return;
+        }
+    }
+
+    // Handle special paths
+    if (libc.strcmp(path, "/") or libc.strcmp(path, "\\")) {
+        setPath("/");
+        return;
+    }
+
+    if (libc.strcmp(path, "..")) {
+        // Go to parent directory
+        if (path_len <= 1) {
+            // Already at root
+            return;
+        }
+
+        // Find last separator
+        var i = path_len - 1;
+        // Skip trailing slashes
+        while (i > 0 and current_path[i] == '/') : (i -= 1) {}
+        // Find previous slash
+        while (i > 0 and current_path[i] != '/') : (i -= 1) {}
+        // Update path
+        if (i == 0) {
+            setPath("/");
+        } else {
+            setPath(current_path[0..i]);
+        }
+        return;
+    }
+
+    if (libc.strcmp(path, ".")) {
+        // Stay in current directory
+        return;
+    }
+
+    // Handle path with or without leading slash
+    var new_path: [256]u8 = undefined;
+    var new_path_len: usize = 0;
+
+    if (path[0] == '/' or path[0] == '\\') {
+        // Absolute path
+        @memcpy(new_path[0..path.len], path);
+        new_path_len = path.len;
+    } else {
+        // Relative path - concatenate with current path
+        @memcpy(new_path[0..path_len], current_path[0..path_len]);
+        new_path_len = path_len;
+
+        if (new_path_len > 0 and new_path[new_path_len - 1] != '/') {
+            new_path[new_path_len] = '/';
+            new_path_len += 1;
+        }
+
+        @memcpy(new_path[new_path_len..][0..path.len], path);
+        new_path_len += path.len;
+    }
+
+    // Normalize slashes
+    for (new_path[0..new_path_len]) |*c| {
+        if (c.* == '\\') c.* = '/';
+    }
+
+    // Try to change directory
+    if (fat32.changeDir(new_path[0..new_path_len])) {
+        setPath(new_path[0..new_path_len]);
+    } else {
+        libc.print("cd: ");
+        for (path) |c| {
+            libc.putchar(c);
+        }
+        libc.println(": No such file or directory");
+    }
 }
 
 fn printMemInfo() void {

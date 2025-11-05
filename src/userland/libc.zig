@@ -28,6 +28,11 @@ pub fn read(fd: u32, buffer: []u8) u32 {
     return syscalls.sys_read(fd, buffer.ptr, @as(u32, @intCast(buffer.len)));
 }
 
+pub fn putchar(c: u8) void {
+    const buf = [_]u8{c};
+    _ = write(1, &buf);
+}
+
 pub fn print(text: []const u8) void {
     _ = write(1, text);
 }

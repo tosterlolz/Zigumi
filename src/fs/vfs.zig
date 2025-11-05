@@ -1,7 +1,5 @@
 // Virtual File System for Zigumi OS
 
-const vga = @import("../term/vga.zig");
-
 pub const FileType = enum(u8) {
     Regular,
     Directory,
@@ -80,38 +78,65 @@ pub fn createFileWithContent(path: []const u8, name: []const u8, content: []cons
     return id;
 }
 
-pub fn listFiles(writer: *vga.Writer) void {
-    writer.write("Files in root:\n");
-    writer.write("TYPE  SIZE     NAME\n");
-    writer.write("----  -------  ----------------\n");
+const vga = @import("../term/vga.zig");
+const diskman = @import("../drivers/diskman.zig");
+const fat32 = @import("fat32.zig");
 
-    var i: usize = 0;
-    while (i < file_count) : (i += 1) {
-        if (root_files[i]) |file| {
-            const type_str = switch (file.file_type) {
-                .Regular => "FILE",
-                .Directory => "DIR ",
-                .Device => "DEV ",
-            };
-            writer.write(type_str);
-            writer.write("  ");
+fn isDriveLetter(path: []const u8) bool {
+    return path.len >= 2 and path[1] == ':' and (path[0] >= 'A' and path[0] <= 'D');
+}
 
-            // Print size
-            printNum(writer, file.size);
+fn extractDriveLetter(path: []const u8) u8 {
+    return path[0];
+}
 
-            // Pad to 8 chars
-            const size_digits = countDigits(file.size);
-            var pad: usize = 0;
-            while (pad < 8 - size_digits) : (pad += 1) {
-                writer.write(" ");
+fn isRoot(path: []const u8) bool {
+    return path.len == 3 and path[2] == '/';
+}
+
+pub fn listFiles(writer: *vga.Writer, path: []const u8) void {
+    if (isDriveLetter(path)) {
+        const letter = extractDriveLetter(path);
+        const fs = fat32.getFilesystem(letter) catch {
+            writer.write("Error: Filesystem not mounted\n");
+            return;
+        };
+        fs.listDir(path) catch {
+            writer.write("Error: Failed to list directory\n");
+        };
+    } else {
+        writer.write("Files in root:\n");
+        writer.write("TYPE  SIZE     NAME\n");
+        writer.write("----  -------  ----------------\n");
+
+        var i: usize = 0;
+        while (i < file_count) : (i += 1) {
+            if (root_files[i]) |file| {
+                const type_str = switch (file.file_type) {
+                    .Regular => "FILE",
+                    .Directory => "DIR ",
+                    .Device => "DEV ",
+                };
+                writer.write(type_str);
+                writer.write("  ");
+
+                // Print size
+                printNum(writer, file.size);
+
+                // Pad to 8 chars
+                const size_digits = countDigits(file.size);
+                var pad: usize = 0;
+                while (pad < 8 - size_digits) : (pad += 1) {
+                    writer.write(" ");
+                }
+
+                // Print name
+                var j: usize = 0;
+                while (j < file.name_len) : (j += 1) {
+                    writer.putChar(file.name[j]);
+                }
+                writer.write("\n");
             }
-
-            // Print name
-            var j: usize = 0;
-            while (j < file.name_len) : (j += 1) {
-                writer.putChar(file.name[j]);
-            }
-            writer.write("\n");
         }
     }
 }
