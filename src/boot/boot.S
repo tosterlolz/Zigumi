@@ -54,7 +54,7 @@ disk_load:
     mov %ax, %es
     mov $0x1000, %bx
     mov $0x02, %ah
-    mov $4, %al
+    mov $25, %al        # Load 25 sectors (12.5KB) to fit the kernel
     mov $0x00, %ch
     mov $2, %cl
     mov $0x00, %dh

@@ -139,7 +139,7 @@ pub fn sys_read(fd: u32, buffer_ptr: [*]u8, max_length: u32) u32 {
     return @as(u32, @intCast(index));
 }
 
-fn sys_sleep(milliseconds: u32) void {
+pub fn sys_sleep(milliseconds: u32) void {
     // Simple busy wait for now
     var i: u32 = 0;
     while (i < milliseconds * 1000) : (i += 1) {
