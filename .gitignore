@@ -5,3 +5,4 @@ build/
 *.bin
 *.elf
 Zigumi.img
+bin/

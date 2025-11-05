@@ -1,4 +1,10 @@
-// Virtual File System for Zigumi OS
+// Filesystem Router for Zigumi OS
+// Routes filesystem operations to the appropriate filesystem driver
+
+const diskman = @import("../drivers/diskman.zig");
+const fat32 = @import("fat32.zig");
+const ext2 = @import("ext2.zig");
+const vga = @import("../term/vga.zig");
 
 pub const FileType = enum(u8) {
     Regular,
@@ -6,229 +12,111 @@ pub const FileType = enum(u8) {
     Device,
 };
 
-pub const File = struct {
-    name: [64]u8,
-    name_len: usize,
-    file_type: FileType,
-    size: u32,
-    data: ?[*]u8,
-
-    pub fn init(name: []const u8, ftype: FileType) File {
-        var file = File{
-            .name = [_]u8{0} ** 64,
-            .name_len = 0,
-            .file_type = ftype,
-            .size = 0,
-            .data = null,
-        };
-
-        var i: usize = 0;
-        while (i < name.len and i < 64) : (i += 1) {
-            file.name[i] = name[i];
-        }
-        file.name_len = i;
-
-        return file;
-    }
-};
-
-const MAX_FILES = 64;
-
-var root_files: [MAX_FILES]?File = [_]?File{null} ** MAX_FILES;
-var file_count: usize = 0;
-
-pub fn init() void {
-    // Initialize with some default files/devices
-    _ = createFile("/", "dev", .Directory) catch {};
-    _ = createFile("/", "home", .Directory) catch {};
-    _ = createFile("/", "tmp", .Directory) catch {};
-    _ = createFile("/dev", "null", .Device) catch {};
-    _ = createFile("/dev", "zero", .Device) catch {};
-    _ = createFile("/dev", "tty", .Device) catch {};
-
-    // Create a welcome file
-    const welcome_text = "Welcome to Zigumi OS!\nA simple x86 OS written in Zig.\n";
-    _ = createFileWithContent("/", "welcome.txt", welcome_text) catch {};
-}
-pub fn createFile(path: []const u8, name: []const u8, ftype: FileType) !u32 {
-    if (file_count >= MAX_FILES) {
-        return error.FileSystemFull;
-    }
-
-    _ = path; // TODO: Use path for directory structure
-
-    const file = File.init(name, ftype);
-    root_files[file_count] = file;
-    const id = @as(u32, @intCast(file_count));
-    file_count += 1;
-
-    return id;
-}
-
-pub fn createFileWithContent(path: []const u8, name: []const u8, content: []const u8) !u32 {
-    const id = try createFile(path, name, .Regular);
-
-    if (root_files[id]) |*file| {
-        file.size = @as(u32, @intCast(content.len));
-        // In real FS, we'd allocate memory here
-        // For now, just store the pointer (const data)
-        file.data = @constCast(content.ptr);
-    }
-
-    return id;
-}
-
-const vga = @import("../term/vga.zig");
-const diskman = @import("../drivers/diskman.zig");
-const fat32 = @import("fat32.zig");
-
+// Path parsing helpers
 fn isDriveLetter(path: []const u8) bool {
-    return path.len >= 2 and path[1] == ':' and (path[0] >= 'A' and path[0] <= 'D');
+    return path.len >= 2 and path[1] == ':' and
+        ((path[0] >= 'A' and path[0] <= 'Z') or (path[0] >= 'a' and path[0] <= 'z'));
 }
 
 fn extractDriveLetter(path: []const u8) u8 {
+    if (path[0] >= 'a' and path[0] <= 'z') {
+        return path[0] - 32; // Convert to uppercase
+    }
     return path[0];
 }
 
-fn isRoot(path: []const u8) bool {
-    return path.len == 3 and path[2] == '/';
+fn getPathAfterDrive(path: []const u8) []const u8 {
+    if (isDriveLetter(path) and path.len > 2) {
+        return path[2..];
+    }
+    return path;
 }
 
+// Route to appropriate filesystem
 pub fn listFiles(writer: *vga.Writer, path: []const u8) void {
     if (isDriveLetter(path)) {
         const letter = extractDriveLetter(path);
-        const fs = fat32.getFilesystem(letter) catch {
-            writer.write("Error: Filesystem not mounted\n");
-            return;
-        };
-        fs.listDir(path) catch {
-            writer.write("Error: Failed to list directory\n");
-        };
-    } else {
-        writer.write("Files in root:\n");
-        writer.write("TYPE  SIZE     NAME\n");
-        writer.write("----  -------  ----------------\n");
+        const actual_path = getPathAfterDrive(path);
 
-        var i: usize = 0;
-        while (i < file_count) : (i += 1) {
-            if (root_files[i]) |file| {
-                const type_str = switch (file.file_type) {
-                    .Regular => "FILE",
-                    .Directory => "DIR ",
-                    .Device => "DEV ",
-                };
-                writer.write(type_str);
-                writer.write("  ");
+        if (fat32.getFilesystem(letter)) |fs| {
+            const entries = fs.listRootDirectory() catch {
+                writer.write("Error: Failed to list directory\n");
+                return;
+            };
 
-                // Print size
-                printNum(writer, file.size);
+            // Print directory listing
+            writer.write("Directory of ");
+            writer.putChar(letter);
+            writer.write(":");
+            writer.write(actual_path);
+            writer.write("\n\n");
 
-                // Pad to 8 chars
-                const size_digits = countDigits(file.size);
-                var pad: usize = 0;
-                while (pad < 8 - size_digits) : (pad += 1) {
-                    writer.write(" ");
+            for (entries) |entry| {
+                // Skip empty entries
+                if (entry.name[0] == 0) break;
+
+                // Print attributes
+                if ((entry.attributes & 0x10) != 0) {
+                    writer.write("<DIR>  ");
+                } else {
+                    writer.write("       ");
                 }
 
-                // Print name
-                var j: usize = 0;
-                while (j < file.name_len) : (j += 1) {
-                    writer.putChar(file.name[j]);
+                // Print name (8.3 format)
+                var i: usize = 0;
+                while (i < 11 and entry.name[i] != 0) : (i += 1) {
+                    if (i == 8) writer.write(".");
+                    writer.putChar(entry.name[i]);
                 }
                 writer.write("\n");
             }
+        } else {
+            writer.write("Error: Drive not mounted\n");
         }
+    } else {
+        // In-memory/virtual filesystem not implemented
+        writer.write("Error: Virtual filesystem not supported\n");
+        writer.write("Use drive letters (A:/, B:/, etc.)\n");
     }
 }
 
-pub fn readFile(name: []const u8, buffer: []u8) !usize {
-    var i: usize = 0;
-    while (i < file_count) : (i += 1) {
-        if (root_files[i]) |file| {
-            if (nameMatches(file.name[0..file.name_len], name)) {
-                if (file.data) |data| {
-                    const copy_len = if (file.size < buffer.len) file.size else @as(u32, @intCast(buffer.len));
-                    var j: usize = 0;
-                    while (j < copy_len) : (j += 1) {
-                        buffer[j] = data[j];
-                    }
-                    return copy_len;
-                }
-                return 0;
-            }
-        }
-    }
-    return error.FileNotFound;
+pub fn changeDrive(letter: u8) bool {
+    const dm = diskman.getManager();
+    const drive = dm.getDrive(letter) catch return false;
+    return drive.mounted;
 }
 
-pub fn writeFile(name: []const u8, data: []const u8) !void {
-    var i: usize = 0;
-    while (i < file_count) : (i += 1) {
-        if (root_files[i]) |*file| {
-            if (nameMatches(file.name[0..file.name_len], name)) {
-                file.size = @as(u32, @intCast(data.len));
-                file.data = @constCast(data.ptr);
-                return;
-            }
-        }
-    }
+pub fn changeDir(path: []const u8) bool {
+    if (isDriveLetter(path)) {
+        const letter = extractDriveLetter(path);
+        const actual_path = getPathAfterDrive(path);
 
-    // File doesn't exist, create it
-    const id = try createFile("/", name, .Regular);
-    if (root_files[id]) |*file| {
-        file.size = @as(u32, @intCast(data.len));
-        file.data = @constCast(data.ptr);
-    }
-}
-
-pub fn fileExists(name: []const u8) bool {
-    var i: usize = 0;
-    while (i < file_count) : (i += 1) {
-        if (root_files[i]) |file| {
-            if (nameMatches(file.name[0..file.name_len], name)) {
-                return true;
-            }
+        if (fat32.getFilesystem(letter)) |_| {
+            // For now, just verify the path format is valid
+            _ = actual_path;
+            return true;
         }
     }
     return false;
 }
 
-fn nameMatches(name1: []const u8, name2: []const u8) bool {
-    if (name1.len != name2.len) return false;
+pub fn readFile(path: []const u8, buffer: []u8) !usize {
+    if (isDriveLetter(path)) {
+        const letter = extractDriveLetter(path);
+        const actual_path = getPathAfterDrive(path);
 
-    var i: usize = 0;
-    while (i < name1.len) : (i += 1) {
-        if (name1[i] != name2[i]) return false;
+        if (fat32.getFilesystem(letter)) |_| {
+            // Extract filename from path
+            // For now, treat the entire actual_path as filename
+            _ = fat32.readFile(path, actual_path) catch return error.FileNotFound;
+            _ = buffer; // TODO: copy data to buffer
+            return 0;
+        }
     }
-    return true;
+    return error.FileNotFound;
 }
 
-fn printNum(writer: *vga.Writer, num: u32) void {
-    if (num == 0) {
-        writer.putChar('0');
-        return;
-    }
-
-    if (num < 10) {
-        writer.putChar(@as(u8, @intCast(num + '0')));
-    } else {
-        printNum(writer, num / 10);
-        writer.putChar(@as(u8, @intCast((num % 10) + '0')));
-    }
-}
-
-fn countDigits(num: u32) usize {
-    if (num == 0) return 1;
-
-    var count: usize = 0;
-    var n = num;
-    while (n > 0) {
-        n /= 10;
-        count += 1;
-    }
-    return count;
-}
-
-pub fn getFileCount() usize {
-    return file_count;
+pub fn init() void {
+    // Initialize filesystem routing - nothing needed here
+    // Individual filesystems initialize themselves
 }

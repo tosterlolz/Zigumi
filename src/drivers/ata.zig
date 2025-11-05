@@ -28,6 +28,10 @@ pub const ATADrive = enum(u8) {
 };
 
 pub const ATA = struct {
+    pub fn init() void {
+        // Placeholder: controller init not required for PIO reads in QEMU
+    }
+
     pub fn outb(port: u16, value: u8) void {
         asm volatile ("outb %[val], %[port]"
             :
@@ -61,11 +65,13 @@ pub const ATA = struct {
         }
     }
 
-    pub fn readSector(lba: u32, buffer: [*]u8) !void {
+    // drive: 0 = primary master (hda), 1 = primary slave (hdb)
+    pub fn readSector(drive: u8, lba: u32, buffer: [*]u8) !void {
         waitReady();
 
-        // Select drive and set LBA
-        const drive_select = @as(u8, 0xE0) | @as(u8, @truncate((lba >> 24) & 0x0F));
+        // Select drive (master/slave) and set LBA
+        const base: u8 = if (drive == 0) 0xE0 else 0xF0;
+        const drive_select = base | @as(u8, @truncate((lba >> 24) & 0x0F));
         outb(ATAPort.DrivePort, drive_select);
 
         // Set sector count (1 sector)
@@ -94,14 +100,13 @@ pub const ATA = struct {
     }
 };
 
-pub fn read_sectors(drive: u8, lba: u32, count: u32, buffer: [*]u8, _: u32) !void {
+pub fn read_sectors(drive: u8, lba: u32, count: u32, buffer: [*]u8) !void {
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         try readSectorFromDisk(drive, lba + i, buffer + (i * 512));
     }
 }
 
-pub fn readSectorFromDisk(_drive: u8, sector: u32, buffer: [*]u8) !void {
-    _ = _drive;
-    try ATA.readSector(sector, buffer);
+pub fn readSectorFromDisk(drive: u8, sector: u32, buffer: [*]u8) !void {
+    try ATA.readSector(drive, sector, buffer);
 }

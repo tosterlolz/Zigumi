@@ -1,7 +1,6 @@
 // FAT32 Filesystem driver for Zigumi OS
 
 const diskman = @import("../drivers/diskman.zig");
-const vfs = @import("vfs.zig");
 const std = @import("std");
 
 const BootSector = extern struct {
@@ -54,17 +53,31 @@ pub const FAT32Error = error{
     DriveNotFound,
     FileNotFound,
     ReadError,
+    MountFailed,
 };
 
-var current_fs: ?*FAT32FS = null;
+const MAX_MOUNTED_DRIVES = 4;
 
-pub fn mount(drive: *diskman.Drive) !void {
-    const fs = switch (drive.letter) {
-        'A', 'a' => &fat32fs_a,
-        'B', 'b' => &fat32fs_b,
-        else => return FAT32Error.DriveNotFound,
-    };
-    try fs.mount();
+var mounted_filesystems: [MAX_MOUNTED_DRIVES]?FAT32FS = [_]?FAT32FS{null} ** MAX_MOUNTED_DRIVES;
+var fs_count: usize = 0;
+
+pub fn mount(drive: *diskman.Drive) !*FAT32FS {
+    // Find an empty slot
+    var slot_idx: usize = 0;
+    while (slot_idx < MAX_MOUNTED_DRIVES) : (slot_idx += 1) {
+        if (mounted_filesystems[slot_idx] == null) break;
+    }
+
+    if (slot_idx >= MAX_MOUNTED_DRIVES) return FAT32Error.DriveNotFound;
+
+    var fs = FAT32FS.init(drive.letter);
+    try fs.mountInternal(drive);
+
+    mounted_filesystems[slot_idx] = fs;
+    if (slot_idx >= fs_count) fs_count = slot_idx + 1;
+
+    // Return pointer to the mounted filesystem
+    return &mounted_filesystems[slot_idx].?;
 }
 
 pub fn changeDrive(letter: u8) bool {
@@ -73,6 +86,8 @@ pub fn changeDrive(letter: u8) bool {
     if (!drive.mounted) {
         dm.mountDrive(letter) catch return false;
     }
+    // Ensure FAT32 is mounted for this drive
+    _ = mount(drive) catch return false;
     return true;
 }
 
@@ -127,14 +142,21 @@ pub const FAT32FS = struct {
         };
     }
 
-    pub fn mount(self: *FAT32FS) !void {
-        const dm = diskman.getManager();
-        const mounted_drive = try dm.getDrive(self.drive_letter);
+    fn mountInternal(self: *FAT32FS, mounted_drive: *diskman.Drive) !void {
         self.drive = mounted_drive;
 
         try mounted_drive.readSector(0, &self.boot_buffer);
 
         const bs = @as(*const BootSector, @ptrCast(@alignCast(&self.boot_buffer))).*;
+        // Basic FAT32 sanity checks to avoid mounting non-FAT32 media
+        // Check fs_type starts with "FAT32"
+        if (!std.mem.eql(u8, bs.fs_type[0..5], "FAT32")) {
+            return FAT32Error.MountFailed;
+        }
+        // Check reasonable geometry values
+        if (bs.bytes_per_sector == 0 or bs.sectors_per_cluster == 0 or bs.fat_count == 0) {
+            return FAT32Error.MountFailed;
+        }
         self.bytes_per_sector = @as(u32, bs.bytes_per_sector);
         self.sectors_per_cluster = @as(u32, bs.sectors_per_cluster);
         self.reserved_sectors = @as(u32, bs.reserved_sectors);
@@ -216,27 +238,28 @@ pub const FAT32FS = struct {
     }
 };
 
-var fat32fs_a: FAT32FS = undefined;
-var fat32fs_b: FAT32FS = undefined;
 var initialized: bool = false;
 
 pub fn init() void {
-    fat32fs_a = FAT32FS.init('A');
-    fat32fs_b = FAT32FS.init('B');
-
-    // Try mounting both drives
-    fat32fs_a.mount() catch {};
-    fat32fs_b.mount() catch {};
-
+    // Initialize the mounted filesystems array (no auto-mounting to avoid early I/O)
+    var i: usize = 0;
+    while (i < MAX_MOUNTED_DRIVES) : (i += 1) {
+        mounted_filesystems[i] = null;
+    }
+    fs_count = 0;
     initialized = true;
 }
 
 pub fn getFilesystem(letter: u8) ?*FAT32FS {
-    return switch (letter) {
-        'A', 'a' => &fat32fs_a,
-        'B', 'b' => &fat32fs_b,
-        else => null,
-    };
+    var i: usize = 0;
+    while (i < fs_count) : (i += 1) {
+        if (mounted_filesystems[i]) |*fs| {
+            if (fs.drive_letter == letter or fs.drive_letter == (letter | 0x20)) {
+                return fs;
+            }
+        }
+    }
+    return null;
 }
 
 pub fn isInitialized() bool {

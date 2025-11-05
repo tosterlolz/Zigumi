@@ -3,7 +3,10 @@ const keyboard = @import("drivers/keyboard.zig");
 const syscalls = @import("kernel/syscalls.zig");
 const scheduler = @import("kernel/scheduler.zig");
 const tty = @import("term/tty.zig");
-const vfs = @import("fs/vfs.zig");
+const diskman = @import("drivers/diskman.zig");
+const fat32 = @import("fs/fat32.zig");
+const ext2 = @import("fs/ext2.zig");
+const panic_handler = @import("panic.zig");
 
 pub export fn _start() noreturn {
     var writer = vga.Writer.init();
@@ -13,7 +16,9 @@ pub export fn _start() noreturn {
     syscalls.init(&writer, &kbd);
     scheduler.init();
     tty.init();
-    vfs.init();
+    diskman.init(); // Initialize disk manager
+    // Defer FAT32 probing to on-demand changeDrive to avoid early I/O
+    fat32.init(); // Initialize FAT32 (no auto-mount)
 
     writer.setColor(.Yellow, .Black);
     writer.write("Zigumi OS v0.5\n");
@@ -26,7 +31,17 @@ pub export fn _start() noreturn {
     writer.write("[OK] Syscall interface\n");
     writer.write("[OK] Task scheduler\n");
     writer.write("[OK] TTY driver\n");
-    writer.write("[OK] Virtual filesystem\n");
+    writer.write("[OK] Disk manager\n");
+    writer.write("[OK] FAT32 (lazy mount)\n");
+    // Attempt to mount A: once for convenience
+    const mounted_a = fat32.changeDrive('A');
+    if (mounted_a and fat32.isMounted('A')) {
+        writer.write("[OK] FAT32 on A: mounted\n");
+    } else {
+        writer.setColor(.Yellow, .Black);
+        writer.write("[WARN] No FAT32 on A: (use B: if you attached a data disk)\n");
+        writer.setColor(.Green, .Black);
+    }
     writer.write("\n");
 
     // Setup interrupt for syscalls (int 0x80)

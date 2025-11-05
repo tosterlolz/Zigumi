@@ -40,11 +40,10 @@ fn main() void {
 
     while (true) {
         // Print prompt with drive letter and current path
-        libc.print("zigumi@");
         libc.putchar(current_drive);
         libc.print(":");
         libc.print(getFullPath());
-        libc.print("$ ");
+        libc.print(" $ ");
 
         const line = libc.readLine(&buffer);
 
@@ -229,7 +228,34 @@ fn printHelp() void {
 }
 
 fn listFiles(path: []const u8) void {
-    const entries = fat32.listDir(path) catch {
+    // Ensure the current drive is mounted and available
+    if (!fat32.changeDrive(current_drive)) {
+        libc.print("Error: drive ");
+        libc.putchar(current_drive);
+        libc.println(": not available or not FAT32");
+        return;
+    }
+
+    // Build drive-qualified path like "A:/..."
+    var drive_path: [260]u8 = undefined;
+    drive_path[0] = current_drive;
+    drive_path[1] = ':';
+    var dp_len: usize = 2;
+
+    if (path.len == 0) {
+        drive_path[dp_len] = '/';
+        dp_len += 1;
+    } else if (path[0] != '/' and path[0] != '\\') {
+        drive_path[dp_len] = '/';
+        dp_len += 1;
+        @memcpy(drive_path[dp_len..][0..path.len], path);
+        dp_len += path.len;
+    } else {
+        @memcpy(drive_path[dp_len..][0..path.len], path);
+        dp_len += path.len;
+    }
+
+    const entries = fat32.listDir(drive_path[0..dp_len]) catch {
         libc.println("Error: Could not read directory");
         return;
     };
@@ -423,8 +449,25 @@ fn cdCommand(path: []const u8) void {
         if (c.* == '\\') c.* = '/';
     }
 
-    // Try to change directory
-    if (fat32.changeDir(new_path[0..new_path_len])) {
+    // Build drive-qualified path and try to change directory
+    if (!fat32.changeDrive(current_drive)) {
+        libc.println("cd: drive not available");
+        return;
+    }
+
+    var drive_path: [260]u8 = undefined;
+    drive_path[0] = current_drive;
+    drive_path[1] = ':';
+    // Ensure absolute path starts with '/'
+    var dp_len: usize = 2;
+    if (new_path_len == 0 or new_path[0] != '/') {
+        drive_path[dp_len] = '/';
+        dp_len += 1;
+    }
+    @memcpy(drive_path[dp_len..][0..new_path_len], new_path[0..new_path_len]);
+    dp_len += new_path_len;
+
+    if (fat32.changeDir(drive_path[0..dp_len])) {
         setPath(new_path[0..new_path_len]);
     } else {
         libc.print("cd: ");

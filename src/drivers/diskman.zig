@@ -1,4 +1,5 @@
 const ata = @import("ata.zig");
+const filesystem = @import("../fs/filesystem.zig");
 
 pub const DriveError = error{
     DriveNotFound,
@@ -13,15 +14,23 @@ pub const Drive = struct {
     ata_index: u8,
     mounted: bool,
     sector_count: u32,
+    filesystem_id: ?u32, // ID in the filesystem registry
 
     pub fn read(self: *const Drive, lba: u32, buffer: []u8) !void {
         if (!self.mounted) return DriveError.NotMounted;
-        try ata.read_sectors(self.ata_index, lba, 1, buffer.ptr, @intCast(buffer.len / 512));
+        try ata.read_sectors(self.ata_index, lba, 1, buffer.ptr);
     }
 
     pub fn readSector(self: *const Drive, sector: u32, buffer: [*]u8) !void {
         if (!self.mounted) return DriveError.NotMounted;
-        try ata.read_sectors(self.ata_index, sector, 1, buffer, 1);
+        try ata.read_sectors(self.ata_index, sector, 1, buffer);
+    }
+
+    pub fn getFilesystem(self: *const Drive) ?*filesystem.Filesystem {
+        if (self.filesystem_id) |fs_id| {
+            return filesystem.getFilesystem(fs_id);
+        }
+        return null;
     }
 };
 
@@ -46,6 +55,7 @@ pub const DiskManager = struct {
             .ata_index = ata_index,
             .mounted = false,
             .sector_count = 0, // Will be set on mount
+            .filesystem_id = null,
         };
         self.drive_count += 1;
     }
@@ -64,10 +74,7 @@ pub const DiskManager = struct {
         const drive = try self.getDrive(letter);
         if (drive.mounted) return;
 
-        // In a real implementation, we would detect the filesystem type.
-        // For now, we assume FAT32.
-        const fat32 = @import("../fs/fat32.zig");
-        try fat32.mount(drive);
+        // Mark as mounted - filesystem driver will handle actual mounting
         drive.mounted = true;
     }
 };
