@@ -1,4 +1,4 @@
-# Zigumi OS
+# Zigumi OS - (dead, somebody plz fix it)
 
 Zigumi OS is a simple operating system project written in Zig. It features a structured layout with modular components, including a bootloader, framebuffer initialization, PS/2 keyboard support, and a minimal interactive shell.
 
