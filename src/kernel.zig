@@ -11,6 +11,12 @@ pub export fn _start() noreturn {
     var writer = vga.Writer.init();
     var kbd = keyboard.Keyboard.init();
 
+    // Draw a simple window for demonstration
+    writer.setColor(.White, .Blue);
+    writer.drawWindow(2, 10, 60, 8, "Zigumi");
+    writer.setColor(.White, .Blue);
+    writer.writeAt(3, 12, "Welcome to Zigumi — window demo!");
+
     // Initialize subsystems
     syscalls.init(&writer, &kbd);
     scheduler.init();

@@ -5,7 +5,7 @@ Zigumi OS is a simple operating system project written in Zig. It features a str
 
 ## Features
 
-- **Bootloader**: Utilizes Limine for booting the OS.
+- **Bootloader**: Utilizes Grub for booting the OS.
 - **Framebuffer**: Initializes a framebuffer with pastel colors for output.
 - **PS/2 Keyboard Support**: Handles keyboard input through a PS/2 driver.
 - **Interactive Shell**: Provides a minimal shell for user interaction.

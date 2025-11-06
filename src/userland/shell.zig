@@ -308,10 +308,10 @@ fn listFiles(path: []const u8) void {
     libc.println(" Dir(s)");
 }
 
-fn printNumber(num: u32) void {
+fn printNumber(num: usize) void {
     var buf: [20]u8 = undefined;
     var len: usize = 0;
-    var n = num;
+    var n: usize = num;
 
     if (n == 0) {
         libc.putchar('0');

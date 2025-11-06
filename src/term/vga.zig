@@ -120,6 +120,84 @@ pub const Writer = struct {
         self.fg = fg;
         self.bg = bg;
     }
+
+    pub fn writeAt(self: *Writer, row: usize, col: usize, text: []const u8) void {
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            const ch = text[i];
+            const idx = row * VGA_WIDTH + col + i;
+            if (row < VGA_HEIGHT and col + i < VGA_WIDTH) {
+                const color: u8 = (@intFromEnum(self.bg) << 4) | @intFromEnum(self.fg);
+                VGA_BUFFER[idx] = (@as(u16, color) << 8) | @as(u16, ch);
+                serial_write_char(ch);
+            }
+        }
+    }
+
+    pub fn drawWindow(self: *Writer, top: usize, left: usize, width: usize, height: usize, title: []const u8) void {
+        if (width < 2 or height < 2) return;
+        // Clip to screen
+        const max_w = if (left + width <= VGA_WIDTH) width else VGA_WIDTH - left;
+        const max_h = if (top + height <= VGA_HEIGHT) height else VGA_HEIGHT - top;
+
+        const corner: u8 = '+';
+        const hor: u8 = '-';
+        const ver: u8 = '|';
+
+        // Top border
+        if (max_h > 0) {
+            const top_row = top;
+            // left corner
+            VGA_BUFFER[top_row * VGA_WIDTH + left] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, corner);
+            var x: usize = 1;
+            while (x + 1 < max_w) : (x += 1) {
+                VGA_BUFFER[top_row * VGA_WIDTH + left + x] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, hor);
+            }
+            if (max_w > 1) {
+                VGA_BUFFER[top_row * VGA_WIDTH + left + max_w - 1] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, corner);
+            }
+        }
+
+        // Middle rows
+        var ry: usize = 1;
+        while (ry + 1 < max_h) : (ry += 1) {
+            const row = top + ry;
+            // left border
+            VGA_BUFFER[row * VGA_WIDTH + left] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, ver);
+            // fill
+            var cx: usize = 1;
+            while (cx + 1 < max_w) : (cx += 1) {
+                VGA_BUFFER[row * VGA_WIDTH + left + cx] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, ' ');
+            }
+            // right border
+            if (max_w > 1) {
+                VGA_BUFFER[row * VGA_WIDTH + left + max_w - 1] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, ver);
+            }
+        }
+
+        // Bottom border
+        if (max_h > 1) {
+            const bot_row = top + max_h - 1;
+            VGA_BUFFER[bot_row * VGA_WIDTH + left] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, corner);
+            var x2: usize = 1;
+            while (x2 + 1 < max_w) : (x2 += 1) {
+                VGA_BUFFER[bot_row * VGA_WIDTH + left + x2] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, hor);
+            }
+            if (max_w > 1) {
+                VGA_BUFFER[bot_row * VGA_WIDTH + left + max_w - 1] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, corner);
+            }
+        }
+
+        // Title (if any) — write starting at left+2 on top border
+        if (title.len > 0 and width > 4) {
+            var i: usize = 0;
+            var pos = left + 2;
+            while (i < title.len and pos < left + max_w - 2) : (i += 1) {
+                VGA_BUFFER[(top) * VGA_WIDTH + pos] = (@as(u16, (@intFromEnum(self.bg) << 4 | @intFromEnum(self.fg))) << 8) | @as(u16, title[i]);
+                pos += 1;
+            }
+        }
+    }
 };
 
 fn serial_write_char(c: u8) void {
